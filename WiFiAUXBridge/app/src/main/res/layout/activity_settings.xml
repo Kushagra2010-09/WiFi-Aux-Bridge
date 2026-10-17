@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@color/bg_dark" android:fillViewport="true">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="20dp">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:gravity="center_vertical">
+            <TextView android:id="@+id/tvBack" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="@string/back" android:textColor="@color/accent" android:padding="8dp" android:textSize="15sp" />
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="@string/settings_title" android:textColor="@color/text_primary" android:textSize="20sp"
+                android:textStyle="bold" android:gravity="center" android:layout_marginEnd="40dp" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:background="@drawable/bg_card" android:padding="16dp"
+            android:layout_marginTop="16dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/settings_quality"
+                android:textColor="@color/text_primary" android:textSize="16sp" android:textStyle="bold" />
+            <RadioGroup android:id="@+id/qualityGroup" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="8dp">
+                <RadioButton android:id="@+id/radioLow" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="@string/settings_quality_low" android:textColor="@color/text_primary" android:buttonTint="@color/accent" />
+                <RadioButton android:id="@+id/radioMedium" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="@string/settings_quality_medium" android:textColor="@color/text_primary" android:buttonTint="@color/accent" />
+                <RadioButton android:id="@+id/radioHigh" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="@string/settings_quality_high" android:textColor="@color/text_primary" android:buttonTint="@color/accent" />
+            </RadioGroup>
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:background="@drawable/bg_card" android:padding="16dp"
+            android:layout_marginTop="16dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/settings_buffer"
+                android:textColor="@color/text_primary" android:textSize="16sp" android:textStyle="bold" />
+            <TextView android:id="@+id/tvBufferValue" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginTop="2dp" android:text="150 ms" android:textColor="@color/text_secondary" android:textSize="13sp" />
+            <SeekBar android:id="@+id/seekBuffer" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="4dp" android:max="480" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:background="@drawable/bg_card" android:padding="16dp"
+            android:layout_marginTop="16dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical">
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/settings_low_latency"
+                        android:textColor="@color/text_primary" android:textSize="16sp" android:textStyle="bold" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/settings_low_latency_desc"
+                        android:textColor="@color/text_secondary" android:textSize="12sp" />
+                </LinearLayout>
+                <Switch android:id="@+id/switchLowLatency" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:background="@drawable/bg_card" android:padding="16dp"
+            android:layout_marginTop="16dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical">
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/settings_auto_reconnect"
+                        android:textColor="@color/text_primary" android:textSize="16sp" android:textStyle="bold" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/settings_auto_reconnect_desc"
+                        android:textColor="@color/text_secondary" android:textSize="12sp" />
+                </LinearLayout>
+                <Switch android:id="@+id/switchAutoReconnect" android:layout_width="wrap_content" android:layout_height="wrap_content" />
+            </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:background="@drawable/bg_card" android:padding="16dp"
+            android:layout_marginTop="16dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/settings_port"
+                android:textColor="@color/text_primary" android:textSize="16sp" android:textStyle="bold" />
+            <EditText android:id="@+id/etPort" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="6dp" android:inputType="number" android:textColor="@color/text_primary" />
+        </LinearLayout>
+            <Button android:id="@+id/btnSave" android:layout_width="match_parent" android:layout_height="56dp"
+                android:text="@string/save" android:textColor="@color/white" android:textStyle="bold"
+                android:textSize="16sp" android:background="@drawable/bg_button_primary" android:layout_marginTop="20dp" android:layout_marginBottom="24dp" />
+    </LinearLayout>
+</ScrollView>

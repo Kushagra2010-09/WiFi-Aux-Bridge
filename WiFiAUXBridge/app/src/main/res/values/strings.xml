@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Wi-Fi AUX Bridge</string>
+    <string name="tagline">Stream your phone\'s audio to the car over Wi-Fi</string>
+    <string name="mode_transmitter">TRANSMITTER</string>
+    <string name="mode_transmitter_desc">Play music here. This phone captures and sends audio.</string>
+    <string name="mode_receiver">RECEIVER</string>
+    <string name="mode_receiver_desc">Plug this phone into the car AUX jack. It receives and plays audio.</string>
+    <string name="settings">Settings</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_scanning">Scanning for receivers…</string>
+    <string name="scan_for_receivers">Scan for Receivers</string>
+    <string name="manual_ip">IP address</string>
+    <string name="manual_port">Port</string>
+    <string name="connect">CONNECT</string>
+    <string name="start_stream">START STREAM</string>
+    <string name="stop_stream">STOP STREAM</string>
+    <string name="no_devices_found">No receivers found yet. Make sure both phones are on the same Wi-Fi network, or enter the IP shown on the receiver manually.</string>
+    <string name="latency_label">Latency</string>
+    <string name="bitrate_label">Bitrate</string>
+    <string name="level_label">Audio Level</string>
+    <string name="buffer_label">Buffer</string>
+    <string name="receiver_local_ip">This device\'s address</string>
+    <string name="receiver_pairing_code">Pairing code</string>
+    <string name="start_receiver">START RECEIVER</string>
+    <string name="stop_receiver">STOP RECEIVER</string>
+    <string name="connected_client">Connected to: %1$s</string>
+    <string name="create_hotspot">Create Wi-Fi Hotspot</string>
+    <string name="stop_hotspot">Stop Hotspot</string>
+    <string name="hotspot_not_supported">Hotspot could not be started on this device. Please connect both phones to the same Wi-Fi network instead.</string>
+    <string name="capture_not_supported">This device does not support system audio capture (requires Android 10 or newer). You can still use it as a RECEIVER.</string>
+    <string name="app_not_capturable">This app does not allow its audio to be captured by Android.</string>
+    <string name="permission_required">Microphone permission is required to capture playback audio. This is an Android requirement for the system audio capture API — no microphone audio is actually recorded.</string>
+    <string name="settings_title">Settings</string>
+    <string name="settings_quality">Audio Quality</string>
+    <string name="settings_quality_low">Low (mono, ~64 kbps, most reliable)</string>
+    <string name="settings_quality_medium">Medium (mono, ~128 kbps)</string>
+    <string name="settings_quality_high">High (stereo, ~384 kbps, best quality)</string>
+    <string name="settings_buffer">Buffer size</string>
+    <string name="settings_low_latency">Low-latency mode</string>
+    <string name="settings_low_latency_desc">Smaller buffer, lower delay, slightly higher risk of dropouts</string>
+    <string name="settings_auto_reconnect">Auto-reconnect</string>
+    <string name="settings_auto_reconnect_desc">Automatically re-establish the connection if it drops</string>
+    <string name="settings_port">Network port</string>
+    <string name="save">SAVE</string>
+    <string name="back">Back</string>
+</resources>
