@@ -17,6 +17,9 @@ import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import java.net.InetSocketAddress
+import java.net.Socket
+import kotlin.concurrent.thread
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -95,6 +98,8 @@ class TransmitterActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             binding.tvLog.text = getString(R.string.capture_not_supported)
             binding.btnStream.isEnabled = false
+        } else {
+            binding.btnStream.isEnabled = true
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -178,11 +183,7 @@ class TransmitterActivity : AppCompatActivity() {
             setOnClickListener {
                 binding.etIp.setText(device.ip)
                 binding.etPort.setText(device.tcpPort.toString())
-                Toast.makeText(
-                    this@TransmitterActivity,
-                    "Selected. Confirm the code shown on the receiver is ${device.pairingCode}, then tap CONNECT.",
-                    Toast.LENGTH_LONG
-                ).show()
+                confirmTarget()
             }
         }
         binding.deviceListContainer.addView(row)
@@ -190,18 +191,47 @@ class TransmitterActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------ connect / stream
 
-    private fun confirmTarget() {
+    /** Reads IP/port from the fields. Returns false (and shows a message) if invalid. */
+    private fun applyTargetFromFields(): Boolean {
         val ip = binding.etIp.text.toString().trim()
         val port = binding.etPort.text.toString().toIntOrNull()
         if (ip.isEmpty() || port == null || port !in 1..65535) {
-            Toast.makeText(this, "Enter a valid IP address and port.", Toast.LENGTH_SHORT).show()
-            return
+            Toast.makeText(this, "Enter the receiver's IP address and port first.", Toast.LENGTH_SHORT).show()
+            return false
         }
         selectedIp = ip
         selectedPort = port
         targetConfirmed = true
-        binding.tvStatus.text = "Ready to stream to $ip:$port"
-        binding.btnStream.isEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        return true
+    }
+
+    /** CONNECT: checks that the receiver can actually be reached over the network. */
+    private fun confirmTarget() {
+        if (!applyTargetFromFields()) return
+        val ip = selectedIp ?: return
+        val port = selectedPort
+        binding.tvStatus.text = "Checking receiver at $ip:$port…"
+        thread(name = "tx-probe", isDaemon = true) {
+            val error: String? = try {
+                Socket().use { it.connect(InetSocketAddress(ip, port), 3000) }
+                null
+            } catch (e: Exception) {
+                e.message ?: e.javaClass.simpleName
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (error == null) {
+                    binding.tvStatus.text = "Receiver found at $ip:$port. Now tap START STREAM."
+                    binding.statusDot.backgroundTintList =
+                        ColorStateList.valueOf(Color.parseColor("#2ECC71"))
+                } else {
+                    binding.tvStatus.text =
+                        "Can't reach $ip:$port ($error). Is RECEIVER started on the other phone, and are both on the same Wi-Fi?"
+                    binding.statusDot.backgroundTintList =
+                        ColorStateList.valueOf(Color.parseColor("#FF5C5C"))
+                }
+            }
+        }
     }
 
     private fun isActive(): Boolean {
@@ -214,10 +244,7 @@ class TransmitterActivity : AppCompatActivity() {
             boundService?.requestStop()
             return
         }
-        if (!targetConfirmed || selectedIp == null) {
-            Toast.makeText(this, "Tap CONNECT first to choose a receiver.", Toast.LENGTH_SHORT).show()
-            return
-        }
+        if (!applyTargetFromFields()) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
