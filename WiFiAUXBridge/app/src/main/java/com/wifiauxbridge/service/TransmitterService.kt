@@ -76,6 +76,8 @@ class TransmitterService : Service(), StreamSession.Listener {
 
     private var statsTicker: Thread? = null
     @Volatile private var tickerRunning = false
+    private var silentTicks = 0
+    private var silenceWarned = false
 
     override fun onCreate() {
         super.onCreate()
@@ -273,12 +275,27 @@ class TransmitterService : Service(), StreamSession.Listener {
     private fun startStatsTicker() {
         if (tickerRunning) return
         tickerRunning = true
+        silentTicks = 0
+        silenceWarned = false
         statsTicker = thread(name = "tx-stats", isDaemon = true) {
             while (tickerRunning) {
                 val kbps = ((bytesSinceTick * 8) / 500).toInt()
                 bytesSinceTick = 0
                 val latency = lastLatencyMs
                 val level = lastLevel
+                // If we're connected and capturing but every sample is silent for ~4 s,
+                // tell the user: the source app is probably blocking audio capture.
+                if (capturing && session != null && level == 0) silentTicks++ else silentTicks = 0
+                if (silentTicks >= 8 && !silenceWarned) {
+                    silenceWarned = true
+                    publishState(
+                        ConnState.STREAMING,
+                        "Connected, but NO audio is being captured. Play music in Chrome, YouTube or another app - some apps and DRM content block capture."
+                    )
+                } else if (silentTicks == 0 && silenceWarned) {
+                    silenceWarned = false
+                    publishState(ConnState.STREAMING, "Streaming to $targetIp")
+                }
                 mainHandler.post {
                     val current = _stats.value ?: StreamStats()
                     _stats.value = current.copy(
