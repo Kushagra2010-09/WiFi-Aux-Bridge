@@ -27,6 +27,7 @@ import com.wifiauxbridge.audio.Adpcm
 import com.wifiauxbridge.audio.JitterBuffer
 import com.wifiauxbridge.net.DiscoveryResponder
 import com.wifiauxbridge.net.StreamSession
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import kotlin.concurrent.thread
@@ -35,7 +36,7 @@ import kotlin.concurrent.thread
  * Foreground service (type mediaPlayback): accepts one transmitter, decodes ADPCM audio,
  * and plays it through the normal audio output (headphone/AUX) via AudioTrack.
  */
-class ReceiverService : Service(), StreamSession.Listener {
+class ReceiverService : Service() {
 
     inner class LocalBinder : Binder() {
         fun getService(): ReceiverService = this@ReceiverService
@@ -99,7 +100,9 @@ class ReceiverService : Service(), StreamSession.Listener {
         val port = prefs.tcpPort
         acceptThread = thread(name = "rx-accept", isDaemon = true) {
             try {
-                val server = ServerSocket(port)
+                val server = ServerSocket()
+                server.reuseAddress = true
+                server.bind(InetSocketAddress(port))
                 serverSocket = server
                 discoveryResponder =
                     DiscoveryResponder(Prefs.UDP_DISCOVERY_PORT, port, pairingCode).apply { start() }
@@ -111,13 +114,14 @@ class ReceiverService : Service(), StreamSession.Listener {
                         if (running) publishState(ConnState.ERROR, "Server error: ${e.message}")
                         break
                     }
-                    if (session != null) {
-                        runCatching { incoming.close() }
-                        continue
-                    }
+                    // A new connection always replaces an old one (the old one may be a dead
+                    // half-open socket after a Wi-Fi drop), so reconnecting always works.
+                    if (session != null) cleanupSession()
                     incoming.tcpNoDelay = true
                     clientSocket = incoming
-                    val newSession = StreamSession(incoming, this)
+                    val listener = RxListener()
+                    val newSession = StreamSession(incoming, listener)
+                    listener.owner = newSession
                     session = newSession
                     newSession.start()
                     publishState(
@@ -132,9 +136,35 @@ class ReceiverService : Service(), StreamSession.Listener {
         }
     }
 
-    // ------------------------------------------------------------ StreamSession.Listener
+    // ------------------------------------------------------------ per-connection listener
 
-    override fun onHello(sampleRate: Int, channels: Int, codec: Int) {
+    /** Ignores callbacks from sessions that have been replaced or closed. */
+    private inner class RxListener : StreamSession.Listener {
+        @Volatile var owner: StreamSession? = null
+        private fun mine(): Boolean = owner != null && owner === session
+
+        override fun onHello(sampleRate: Int, channels: Int, codec: Int) {
+            if (mine()) handleHello(sampleRate, channels)
+        }
+
+        override fun onAudio(seq: Int, sampleCount: Int, data: ByteArray) {
+            if (mine()) handleAudio(sampleCount, data)
+        }
+
+        override fun onLatencyUpdate(ms: Long) {
+            if (mine()) lastLatencyMs = ms
+        }
+
+        override fun onBye() {
+            if (mine()) publishState(ConnState.DISCONNECTED, "Transmitter disconnected")
+        }
+
+        override fun onClosed(error: Throwable?) {
+            if (mine()) handleClosed(error)
+        }
+    }
+
+    private fun handleHello(sampleRate: Int, channels: Int) {
         try {
             setupPlayback(sampleRate, channels)
         } catch (e: Exception) {
@@ -145,7 +175,7 @@ class ReceiverService : Service(), StreamSession.Listener {
         publishState(ConnState.STREAMING, "Streaming")
     }
 
-    override fun onAudio(seq: Int, sampleCount: Int, data: ByteArray) {
+    private fun handleAudio(sampleCount: Int, data: ByteArray) {
         bytesSinceTick += data.size
         val dec = decoder ?: return
         if (sampleCount <= 0) return
@@ -153,17 +183,9 @@ class ReceiverService : Service(), StreamSession.Listener {
         jitterBuffer?.offer(pcm)
     }
 
-    override fun onLatencyUpdate(ms: Long) {
-        lastLatencyMs = ms
-    }
-
-    override fun onBye() {
-        publishState(ConnState.DISCONNECTED, "Transmitter disconnected")
-    }
-
-    override fun onClosed(error: Throwable?) {
+    private fun handleClosed(error: Throwable?) {
         if (!running) return
-        val msg = if (error != null) "Connection lost: ${error.message}" else "Disconnected"
+        val msg = if (error != null) "Connection ended" else "Disconnected"
         cleanupSession()
         publishState(ConnState.DISCONNECTED, "$msg — waiting for a transmitter…")
     }
