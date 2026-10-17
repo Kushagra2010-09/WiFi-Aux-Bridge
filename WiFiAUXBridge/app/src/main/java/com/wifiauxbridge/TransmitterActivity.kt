@@ -20,6 +20,11 @@ import android.widget.Toast
 import java.net.InetSocketAddress
 import java.net.Socket
 import kotlin.concurrent.thread
+import kotlin.math.PI
+import kotlin.math.sin
+import com.wifiauxbridge.audio.Adpcm
+import com.wifiauxbridge.net.Protocol
+import com.wifiauxbridge.net.StreamSession
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -109,6 +114,7 @@ class TransmitterActivity : AppCompatActivity() {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
+        addTestToneButton()
         scanForReceivers()
     }
 
@@ -187,6 +193,87 @@ class TransmitterActivity : AppCompatActivity() {
             }
         }
         binding.deviceListContainer.addView(row)
+    }
+
+    // ------------------------------------------------------------ test tone
+
+    @Volatile private var toneRunning = false
+
+    private fun addTestToneButton() {
+        val btn = android.widget.Button(this).apply {
+            text = "TEST TONE (should beep on receiver)"
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            setBackgroundResource(R.drawable.bg_button_secondary)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 150
+            ).apply { topMargin = 24 }
+            setOnClickListener { sendTestTone() }
+        }
+        val parent = binding.tvLog.parent as LinearLayout
+        parent.addView(btn, parent.indexOfChild(binding.tvLog))
+    }
+
+    /**
+     * Sends a 5-second 440 Hz beep to the receiver WITHOUT using audio capture. If this beeps
+     * on the receiver, the network + receiver playback work and any silence is caused by
+     * the capture side (the source app blocking capture, or the phone).
+     */
+    private fun sendTestTone() {
+        if (toneRunning) {
+            toneRunning = false
+            return
+        }
+        if (!applyTargetFromFields()) return
+        val ip = selectedIp ?: return
+        val port = selectedPort
+        toneRunning = true
+        binding.tvStatus.text = "Sending test tone to $ip:$port…"
+        thread(name = "tx-tone", isDaemon = true) {
+            var msg = ""
+            var socket: Socket? = null
+            var session: StreamSession? = null
+            try {
+                val s = Socket()
+                s.tcpNoDelay = true
+                s.connect(InetSocketAddress(ip, port), 4000)
+                socket = s
+                val sess = StreamSession(s, object : StreamSession.Listener {})
+                session = sess
+                sess.start()
+                val rate = 48000
+                sess.sendHello(rate, 1, Protocol.CODEC_ADPCM)
+                val enc = Adpcm.Encoder(1)
+                val chunk = rate / 50 // 20 ms
+                val buf = ShortArray(chunk)
+                val step = 2.0 * PI * 440.0 / rate
+                var phase = 0.0
+                var seq = 0
+                var next = System.nanoTime()
+                val end = System.currentTimeMillis() + 5000
+                while (toneRunning && System.currentTimeMillis() < end) {
+                    for (i in 0 until chunk) {
+                        buf[i] = (sin(phase) * 9000).toInt().toShort()
+                        phase += step
+                    }
+                    sess.sendAudio(seq++, chunk, enc.encode(buf, chunk, 1))
+                    next += 20_000_000L
+                    val sleepMs = (next - System.nanoTime()) / 1_000_000L
+                    if (sleepMs > 0) Thread.sleep(sleepMs)
+                }
+                msg = "Test tone finished. Did the receiver phone beep?"
+            } catch (e: Exception) {
+                msg = "Test tone failed: ${e.message ?: e.javaClass.simpleName}"
+            } finally {
+                runCatching { session?.sendBye() }
+                runCatching { session?.close() }
+                runCatching { socket?.close() }
+                toneRunning = false
+            }
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) binding.tvStatus.text = msg
+            }
+        }
     }
 
     // ------------------------------------------------------------ connect / stream
