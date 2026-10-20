@@ -67,6 +67,7 @@ class ReceiverService : Service() {
     private var playbackThread: Thread? = null
     @Volatile private var playing = false
     @Volatile private var streamChannels = 1
+    @Volatile private var gain = 1f
 
     @Volatile private var bytesSinceTick = 0L
     @Volatile private var lastLatencyMs = -1L
@@ -155,6 +156,10 @@ class ReceiverService : Service() {
             if (mine()) lastLatencyMs = ms
         }
 
+        override fun onVolume(permille: Int) {
+            if (mine()) handleVolume(permille)
+        }
+
         override fun onBye() {
             if (mine()) publishState(ConnState.DISCONNECTED, "Transmitter disconnected")
         }
@@ -164,7 +169,15 @@ class ReceiverService : Service() {
         }
     }
 
+    /** Volume chosen on the transmitter. Squared so the slider feels natural (roughly dB-like). */
+    private fun handleVolume(permille: Int) {
+        val f = permille.coerceIn(0, 1000) / 1000f
+        gain = f * f
+        runCatching { audioTrack?.setVolume(gain) }
+    }
+
     private fun handleHello(sampleRate: Int, channels: Int) {
+        gain = 1f // the transmitter sends its volume right after HELLO
         try {
             setupPlayback(sampleRate, channels)
         } catch (e: Exception) {
@@ -228,6 +241,7 @@ class ReceiverService : Service() {
             builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
         }
         val track = builder.build()
+        track.setVolume(gain)
         audioTrack = track
 
         val chunkMs = 20

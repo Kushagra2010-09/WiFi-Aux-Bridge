@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
@@ -77,6 +78,10 @@ class TransmitterService : Service(), StreamSession.Listener {
     private var statsTicker: Thread? = null
     @Volatile private var tickerRunning = false
     private var silentTicks = 0
+    @Volatile private var followPhoneVolume = true
+    @Volatile private var manualVolumePct = 70
+    private var volumeThread: Thread? = null
+    @Volatile private var volumeRunning = false
     private var silenceWarned = false
 
     override fun onCreate() {
@@ -210,6 +215,7 @@ class TransmitterService : Service(), StreamSession.Listener {
                 publishState(ConnState.CONNECTED, "Connected to $targetIp")
                 startCaptureLoop(channels)
                 startStatsTicker()
+                startVolumeSync()
             } catch (e: Exception) {
                 connecting = false
                 publishState(ConnState.ERROR, "Could not connect: ${e.message}")
@@ -320,6 +326,54 @@ class TransmitterService : Service(), StreamSession.Listener {
         statsTicker = null
     }
 
+    // ------------------------------------------------------------ remote volume
+
+    /**
+     * The receiver's volume follows either this phone's media volume (follow = true) or a
+     * fixed value chosen in the app (follow = false), so this phone itself can be kept quiet.
+     */
+    fun setVolumeControl(follow: Boolean, manualPct: Int) {
+        followPhoneVolume = follow
+        manualVolumePct = manualPct.coerceIn(0, 100)
+    }
+
+    private fun startVolumeSync() {
+        if (volumeRunning) return
+        volumeRunning = true
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        volumeThread = thread(name = "tx-volume", isDaemon = true) {
+            var lastSession: StreamSession? = null
+            var lastSent = -1
+            while (volumeRunning) {
+                val sess = session
+                if (sess != null) {
+                    val permille = if (followPhoneVolume) {
+                        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                        am.getStreamVolume(AudioManager.STREAM_MUSIC) * 1000 / max
+                    } else {
+                        manualVolumePct * 10
+                    }
+                    if (sess !== lastSession || permille != lastSent) {
+                        sess.sendVolume(permille)
+                        lastSession = sess
+                        lastSent = permille
+                    }
+                }
+                try {
+                    Thread.sleep(150)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+        }
+    }
+
+    private fun stopVolumeSync() {
+        volumeRunning = false
+        volumeThread?.interrupt()
+        volumeThread = null
+    }
+
     // ------------------------------------------------------------ StreamSession.Listener
 
     override fun onHelloAck() {
@@ -354,6 +408,7 @@ class TransmitterService : Service(), StreamSession.Listener {
 
     private fun stopEverything() {
         wantConnection = false
+        stopVolumeSync()
         stopCaptureLoop()
         stopStatsTicker()
         session?.let { it.sendBye(); it.close() }
