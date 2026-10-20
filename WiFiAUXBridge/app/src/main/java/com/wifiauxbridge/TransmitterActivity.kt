@@ -16,7 +16,10 @@ import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.CheckBox
+import android.widget.SeekBar
 import android.widget.Toast
+import android.graphics.Typeface
 import java.net.InetSocketAddress
 import java.net.Socket
 import kotlin.concurrent.thread
@@ -50,6 +53,7 @@ class TransmitterActivity : AppCompatActivity() {
             val svc = (service as TransmitterService.LocalBinder).getService()
             boundService = svc
             bound = true
+            pushVolumeSettings()
             svc.stats.observe(this@TransmitterActivity) { stats -> renderStats(stats) }
         }
 
@@ -114,6 +118,7 @@ class TransmitterActivity : AppCompatActivity() {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
+        addVolumeControls()
         addTestToneButton()
         scanForReceivers()
     }
@@ -193,6 +198,72 @@ class TransmitterActivity : AppCompatActivity() {
             }
         }
         binding.deviceListContainer.addView(row)
+    }
+
+    // ------------------------------------------------------------ receiver volume
+
+    private fun pushVolumeSettings() {
+        val sp = getSharedPreferences("tx_ui", MODE_PRIVATE)
+        boundService?.setVolumeControl(sp.getBoolean("follow", true), sp.getInt("manual", 70))
+    }
+
+    private fun addVolumeControls() {
+        val sp = getSharedPreferences("tx_ui", MODE_PRIVATE)
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_card)
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(16) }
+        }
+        val title = TextView(this).apply {
+            text = "Receiver volume"
+            setTextColor(Color.parseColor("#F2F4F8"))
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val follow = CheckBox(this).apply {
+            text = "Follow this phone's volume buttons"
+            isChecked = sp.getBoolean("follow", true)
+            setTextColor(Color.parseColor("#F2F4F8"))
+        }
+        val seek = SeekBar(this).apply {
+            max = 100
+            progress = sp.getInt("manual", 70)
+            isEnabled = !sp.getBoolean("follow", true)
+        }
+        val hint = TextView(this).apply {
+            text = "ON: the old phone's volume follows this phone's volume buttons (this phone's own speaker " +
+                "will also be audible). OFF: use the slider, so you can set this phone's volume to 0 and " +
+                "still control the old phone. Keep the old phone's own volume at maximum."
+            setTextColor(Color.parseColor("#9AA4B2"))
+            textSize = 12f
+        }
+        follow.setOnCheckedChangeListener { _, checked ->
+            sp.edit().putBoolean("follow", checked).apply()
+            seek.isEnabled = !checked
+            pushVolumeSettings()
+        }
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    sp.edit().putInt("manual", progress).apply()
+                    pushVolumeSettings()
+                }
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+        card.addView(title)
+        card.addView(follow)
+        card.addView(seek)
+        card.addView(hint)
+        val parent = binding.tvLog.parent as LinearLayout
+        parent.addView(card, parent.indexOfChild(binding.tvLog))
     }
 
     // ------------------------------------------------------------ test tone
