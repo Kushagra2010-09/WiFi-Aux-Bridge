@@ -14,6 +14,7 @@ object Protocol {
     const val TYPE_PING: Int = 4
     const val TYPE_PONG: Int = 5
     const val TYPE_BYE: Int = 6
+    const val TYPE_VOLUME: Int = 7      // transmitter -> receiver: playback volume, 0..1000
 
     const val CODEC_ADPCM: Int = 1
     const val MAX_PAYLOAD_BYTES: Int = 64 * 1024
@@ -74,6 +75,12 @@ object PayloadCodec {
         val codec = b.get().toInt()
         return Hello(sr, ch, codec)
     }
+
+    fun encodeVolume(permille: Int): ByteArray =
+        ByteBuffer.allocate(2).putShort(permille.coerceIn(0, 1000).toShort()).array()
+
+    fun decodeVolume(payload: ByteArray): Int =
+        (ByteBuffer.wrap(payload).short.toInt() and 0xFFFF).coerceIn(0, 1000)
 
     fun encodeTimestamp(ts: Long): ByteArray = ByteBuffer.allocate(8).putLong(ts).array()
 

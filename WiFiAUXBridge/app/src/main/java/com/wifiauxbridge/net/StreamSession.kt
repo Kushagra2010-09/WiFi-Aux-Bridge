@@ -14,6 +14,7 @@ class StreamSession(
         fun onAudio(seq: Int, sampleCount: Int, data: ByteArray) {}
         fun onLatencyUpdate(ms: Long) {}
         fun onBye() {}
+        fun onVolume(permille: Int) {}
         fun onClosed(error: Throwable?) {}
     }
 
@@ -51,6 +52,9 @@ class StreamSession(
                         val latencyMs = (rttNanos / 1_000_000L) / 2L
                         listener.onLatencyUpdate(latencyMs.coerceAtLeast(0))
                     }
+                    Protocol.TYPE_VOLUME -> {
+                        if (pkt.payload.size >= 2) listener.onVolume(PayloadCodec.decodeVolume(pkt.payload))
+                    }
                     Protocol.TYPE_BYE -> {
                         listener.onBye()
                         running = false
@@ -83,6 +87,9 @@ class StreamSession(
 
     fun sendAudio(seq: Int, sampleCount: Int, data: ByteArray) =
         runCatching { io.send(Protocol.TYPE_AUDIO, PayloadCodec.encodeAudio(seq, sampleCount, data)) }
+
+    fun sendVolume(permille: Int) =
+        runCatching { io.send(Protocol.TYPE_VOLUME, PayloadCodec.encodeVolume(permille)) }
 
     fun sendBye() = runCatching { io.send(Protocol.TYPE_BYE) }
 
