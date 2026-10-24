@@ -78,6 +78,8 @@ class TransmitterService : Service(), StreamSession.Listener {
     private var statsTicker: Thread? = null
     @Volatile private var tickerRunning = false
     private var silentTicks = 0
+    @Volatile private var foregroundStarted = false
+    @Volatile private var disconnectedSince = 0L
     @Volatile private var followPhoneVolume = true
     @Volatile private var manualVolumePct = 70
     private var volumeThread: Thread? = null
@@ -105,10 +107,7 @@ class TransmitterService : Service(), StreamSession.Listener {
                     beginCapture(resultCode, data)
                 }
             }
-            ACTION_STOP -> {
-                stopEverything()
-                stopSelf()
-            }
+            ACTION_STOP -> shutDown()
         }
         return START_NOT_STICKY
     }
@@ -146,8 +145,7 @@ class TransmitterService : Service(), StreamSession.Listener {
         projection.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
                 publishError("Audio capture permission was revoked by the system.")
-                stopEverything()
-                stopSelf()
+                shutDown(keepMessage = true)
             }
         }, mainHandler)
 
@@ -212,12 +210,14 @@ class TransmitterService : Service(), StreamSession.Listener {
                 newSession.start()
                 newSession.sendHello(sampleRate, channels, Protocol.CODEC_ADPCM)
                 connecting = false
+                disconnectedSince = 0L
                 publishState(ConnState.CONNECTED, "Connected to $targetIp")
                 startCaptureLoop(channels)
                 startStatsTicker()
                 startVolumeSync()
             } catch (e: Exception) {
                 connecting = false
+                if (disconnectedSince == 0L) disconnectedSince = System.currentTimeMillis()
                 publishState(ConnState.ERROR, "Could not connect: ${e.message}")
                 maybeReconnect()
             }
@@ -228,6 +228,10 @@ class TransmitterService : Service(), StreamSession.Listener {
         if (!wantConnection) return
         if (!prefs.autoReconnect) {
             publishState(ConnState.DISCONNECTED, "Disconnected")
+            return
+        }
+        if (disconnectedSince != 0L && System.currentTimeMillis() - disconnectedSince >= GIVE_UP_MS) {
+            giveUp()
             return
         }
         publishState(ConnState.RECONNECTING, "Reconnecting…")
@@ -395,18 +399,33 @@ class TransmitterService : Service(), StreamSession.Listener {
         session = null
         runCatching { socket?.close() }
         val msg = if (error != null) "Connection lost: ${error.message}" else "Disconnected"
+        if (disconnectedSince == 0L) disconnectedSince = System.currentTimeMillis()
         publishState(ConnState.DISCONNECTED, msg)
         maybeReconnect()
     }
 
     // ------------------------------------------------------------ lifecycle
 
-    fun requestStop() {
-        stopEverything()
+    fun requestStop() = shutDown()
+
+    private fun shutDown(finalMessage: String = "Stopped", keepMessage: Boolean = false) {
+        stopEverything(publish = !keepMessage)
+        if (!keepMessage) {
+            mainHandler.post {
+                _stats.value = (_stats.value ?: StreamStats()).copy(state = ConnState.IDLE, statusMessage = finalMessage)
+            }
+        }
+        foregroundStarted = false
         stopSelf()
     }
 
-    private fun stopEverything() {
+    /** Receiver unreachable for 10 minutes: stop retrying so the battery isn't drained. */
+    private fun giveUp() {
+        notifyInfo("Stopped: couldn't reach the receiver for 10 minutes.")
+        shutDown("Stopped: receiver not found for 10 minutes")
+    }
+
+    private fun stopEverything(publish: Boolean = true) {
         wantConnection = false
         stopVolumeSync()
         stopCaptureLoop()
@@ -419,11 +438,12 @@ class TransmitterService : Service(), StreamSession.Listener {
         audioRecord = null
         runCatching { mediaProjection?.stop() }
         mediaProjection = null
-        publishState(ConnState.IDLE, "Stopped")
+        if (publish) publishState(ConnState.IDLE, "Stopped")
     }
 
     override fun onDestroy() {
-        stopEverything()
+        stopEverything(publish = false)
+        foregroundStarted = false
         super.onDestroy()
     }
 
@@ -439,6 +459,7 @@ class TransmitterService : Service(), StreamSession.Listener {
     private fun publishError(message: String) = publishState(ConnState.ERROR, message)
 
     private fun startForegroundNotification(text: String) {
+        foregroundStarted = true
         val notification = buildNotification(text)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
@@ -448,6 +469,7 @@ class TransmitterService : Service(), StreamSession.Listener {
     }
 
     private fun updateNotification(text: String) {
+        if (!foregroundStarted) return
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIF_ID, buildNotification(text))
     }
@@ -466,7 +488,24 @@ class TransmitterService : Service(), StreamSession.Listener {
             .build()
     }
 
+    private fun notifyInfo(text: String) {
+        val pi = PendingIntent.getActivity(
+            this, 1, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val n = NotificationCompat.Builder(this, WiFiAuxApp.CHANNEL_ID)
+            .setContentTitle("Wi-Fi AUX Bridge")
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIF_ID_INFO, n)
+    }
+
     companion object {
+        private const val GIVE_UP_MS = 10 * 60 * 1000L
+        private const val NOTIF_ID_INFO = 504
         const val ACTION_START = "com.wifiauxbridge.action.START_TX"
         const val ACTION_STOP = "com.wifiauxbridge.action.STOP_TX"
         const val EXTRA_RESULT_CODE = "resultCode"
