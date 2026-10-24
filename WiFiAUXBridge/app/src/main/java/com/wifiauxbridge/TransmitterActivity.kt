@@ -11,7 +11,9 @@ import android.graphics.Color
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
@@ -22,6 +24,9 @@ import android.widget.Toast
 import android.graphics.Typeface
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.math.PI
 import kotlin.math.sin
@@ -47,6 +52,15 @@ class TransmitterActivity : AppCompatActivity() {
     private var selectedIp: String? = null
     private var selectedPort: Int = Prefs.DEFAULT_TCP_PORT
     private var targetConfirmed = false
+    private var selectedCode: String? = null
+    private var selectedCodeIp: String? = null
+
+    // auto-connect to the last receiver
+    private val autoHandler = Handler(Looper.getMainLooper())
+    @Volatile private var autoSearching = false
+    private var autoBlocked = false
+    private var autoDeadline = 0L
+    private var rememberedKey = ""
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -54,6 +68,7 @@ class TransmitterActivity : AppCompatActivity() {
             boundService = svc
             bound = true
             pushVolumeSettings()
+            maybeStartAutoSearch()
             svc.stats.observe(this@TransmitterActivity) { stats -> renderStats(stats) }
         }
 
@@ -118,6 +133,7 @@ class TransmitterActivity : AppCompatActivity() {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
+        addAutoConnectControl()
         addVolumeControls()
         addTestToneButton()
         scanForReceivers()
@@ -131,6 +147,8 @@ class TransmitterActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
+        autoSearching = false
+        autoHandler.removeCallbacksAndMessages(null)
         if (bound) {
             unbindService(connection)
             bound = false
@@ -138,6 +156,8 @@ class TransmitterActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        autoSearching = false
+        autoHandler.removeCallbacksAndMessages(null)
         discoveryClient?.stop()
         super.onDestroy()
     }
@@ -170,7 +190,7 @@ class TransmitterActivity : AppCompatActivity() {
             onFinished = {
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
-                    binding.tvStatus.text = getString(R.string.status_idle)
+                    if (!autoSearching) binding.tvStatus.text = getString(R.string.status_idle)
                     if (found == 0) binding.tvNoDevices.visibility = View.VISIBLE
                 }
             }
@@ -194,10 +214,153 @@ class TransmitterActivity : AppCompatActivity() {
             setOnClickListener {
                 binding.etIp.setText(device.ip)
                 binding.etPort.setText(device.tcpPort.toString())
+                selectedCode = device.pairingCode
+                selectedCodeIp = device.ip
                 confirmTarget()
             }
         }
         binding.deviceListContainer.addView(row)
+    }
+
+    // ------------------------------------------------------------ auto-connect
+
+    private fun rememberReceiver() {
+        val ip = selectedIp ?: return
+        val sp = getSharedPreferences("tx_ui", MODE_PRIVATE)
+        val code = selectedCode ?: if (sp.getString("last_ip", null) == ip) sp.getString("last_code", null) else null
+        val key = "$ip:$selectedPort:$code"
+        if (key == rememberedKey) return
+        rememberedKey = key
+        val ed = sp.edit().putString("last_ip", ip).putInt("last_port", selectedPort)
+        if (code != null) ed.putString("last_code", code) else ed.remove("last_code")
+        ed.apply()
+    }
+
+    private fun addAutoConnectControl() {
+        val sp = getSharedPreferences("tx_ui", MODE_PRIVATE)
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_card)
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(16) }
+        }
+        val check = CheckBox(this).apply {
+            text = "Auto-connect to my last receiver"
+            isChecked = sp.getBoolean("auto_connect", true)
+            setTextColor(Color.parseColor("#F2F4F8"))
+        }
+        val hint = TextView(this).apply {
+            text = "While this screen is open, the app looks for the receiver you used last (up to 10 minutes) " +
+                "and starts streaming as soon as you approve Android's audio-capture prompt. " +
+                "Android always asks for that approval; it can't be skipped."
+            setTextColor(Color.parseColor("#9AA4B2"))
+            textSize = 12f
+        }
+        check.setOnCheckedChangeListener { _, checked ->
+            sp.edit().putBoolean("auto_connect", checked).apply()
+            if (checked) {
+                autoBlocked = false
+                maybeStartAutoSearch()
+            } else {
+                autoSearching = false
+                autoHandler.removeCallbacksAndMessages(null)
+            }
+        }
+        card.addView(check)
+        card.addView(hint)
+        val parent = binding.tvLog.parent as LinearLayout
+        parent.addView(card, parent.indexOfChild(binding.tvLog))
+    }
+
+    private fun maybeStartAutoSearch() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val sp = getSharedPreferences("tx_ui", MODE_PRIVATE)
+        if (!sp.getBoolean("auto_connect", true)) return
+        if (autoBlocked || autoSearching || isActive()) return
+        if (sp.getString("last_ip", null) == null) return
+        autoSearching = true
+        autoDeadline = System.currentTimeMillis() + 10 * 60 * 1000L
+        binding.tvStatus.text = "Auto-connect: looking for your last receiver (up to 10 minutes)…"
+        autoTick()
+    }
+
+    private fun autoTick() {
+        if (!autoSearching) return
+        if (System.currentTimeMillis() > autoDeadline) {
+            autoSearching = false
+            binding.tvStatus.text =
+                "Auto-connect stopped: your receiver wasn't found for 10 minutes. Tap Scan to try again."
+            return
+        }
+        val sp = getSharedPreferences("tx_ui", MODE_PRIVATE)
+        val lastIp = sp.getString("last_ip", null)
+        if (lastIp == null) {
+            autoSearching = false
+            return
+        }
+        val lastPort = sp.getInt("last_port", Prefs.DEFAULT_TCP_PORT)
+        val lastCode = sp.getString("last_code", null)
+        thread(name = "tx-auto", isDaemon = true) {
+            // 1) broadcast discovery, matching the remembered pairing code (the IP may have changed)
+            val hit = AtomicReference<DiscoveredDevice?>(null)
+            val latch = CountDownLatch(1)
+            val client = DiscoveryClient(Prefs.UDP_DISCOVERY_PORT)
+            client.scan(
+                2500,
+                onFound = { d ->
+                    val match = if (lastCode != null) d.pairingCode == lastCode else d.ip == lastIp
+                    if (match) {
+                        hit.set(d)
+                        client.stop()
+                    }
+                },
+                onFinished = { latch.countDown() }
+            )
+            latch.await(5, TimeUnit.SECONDS)
+            var found: DiscoveredDevice? = hit.get()
+            // 2) fall back to a direct connection test of the last known address
+            if (found == null && autoSearching) {
+                val reachable = try {
+                    Socket().use { it.connect(InetSocketAddress(lastIp, lastPort), 1500) }
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+                if (reachable) found = DiscoveredDevice(lastIp, lastPort, lastCode ?: "")
+            }
+            val result = found
+            runOnUiThread {
+                if (!autoSearching || isFinishing || isDestroyed) return@runOnUiThread
+                if (result != null) {
+                    autoSearching = false
+                    autoStart(result)
+                } else {
+                    autoHandler.postDelayed({ autoTick() }, 1000)
+                }
+            }
+        }
+    }
+
+    private fun autoStart(device: DiscoveredDevice) {
+        binding.etIp.setText(device.ip)
+        binding.etPort.setText(device.tcpPort.toString())
+        selectedCode = device.pairingCode.ifEmpty { null }
+        selectedCodeIp = device.ip
+        if (!applyTargetFromFields()) return
+        binding.tvStatus.text = "Receiver found. Approve the audio-capture prompt to start streaming."
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            autoBlocked = true
+            recordAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            requestProjectionAndStart()
+        }
     }
 
     // ------------------------------------------------------------ receiver volume
@@ -357,6 +520,7 @@ class TransmitterActivity : AppCompatActivity() {
             Toast.makeText(this, "Enter the receiver's IP address and port first.", Toast.LENGTH_SHORT).show()
             return false
         }
+        if (selectedCodeIp != ip) selectedCode = null
         selectedIp = ip
         selectedPort = port
         targetConfirmed = true
@@ -398,6 +562,8 @@ class TransmitterActivity : AppCompatActivity() {
     }
 
     private fun onStreamButtonClicked() {
+        autoSearching = false
+        autoHandler.removeCallbacksAndMessages(null)
         if (isActive()) {
             boundService?.requestStop()
             return
@@ -413,6 +579,8 @@ class TransmitterActivity : AppCompatActivity() {
     }
 
     private fun requestProjectionAndStart() {
+        autoSearching = false
+        autoBlocked = true // never pop the capture dialog again on its own in this visit
         val pm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projectionLauncher.launch(pm.createScreenCaptureIntent())
     }
@@ -432,6 +600,8 @@ class TransmitterActivity : AppCompatActivity() {
         binding.levelMeter.progress = stats.level
         binding.tvLatency.text = if (stats.latencyMs >= 0) "${stats.latencyMs} ms" else "— ms"
         binding.tvBitrate.text = "${stats.bitrateKbps} kbps"
+
+        if (stats.state == ConnState.STREAMING) rememberReceiver()
 
         val active = stats.state != ConnState.IDLE && stats.state != ConnState.ERROR
         binding.btnStream.text = if (active) getString(R.string.stop_stream) else getString(R.string.start_stream)

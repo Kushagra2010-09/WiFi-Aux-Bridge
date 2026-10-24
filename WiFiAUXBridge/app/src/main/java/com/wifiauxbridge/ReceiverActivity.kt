@@ -1,18 +1,25 @@
 package com.wifiauxbridge
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Typeface
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.provider.Settings
+import android.widget.CheckBox
+import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.wifiauxbridge.databinding.ActivityReceiverBinding
@@ -26,6 +33,11 @@ class ReceiverActivity : AppCompatActivity() {
     private var boundService: ReceiverService? = null
     private var bound = false
     private var hotspotReservation: WifiManager.LocalOnlyHotspotReservation? = null
+    private var autoCheck: CheckBox? = null
+    private var suppressAutoListener = false
+
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* optional */ }
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -51,6 +63,66 @@ class ReceiverActivity : AppCompatActivity() {
         binding.tvLocalIp.text = NetUtils.getLocalIpAddress() ?: "Not connected to Wi-Fi"
         binding.btnStartReceiver.setOnClickListener { onStartStopClicked() }
         binding.btnHotspot.setOnClickListener { toggleHotspot() }
+
+        addAutoStartControl()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (autoStartEnabled()) startWatchService()
+    }
+
+    // ------------------------------------------------------------ auto-start on AUX cable
+
+    private fun autoStartEnabled(): Boolean =
+        getSharedPreferences("rx_state", MODE_PRIVATE).getBoolean("auto", false)
+
+    private fun setAutoStartEnabled(on: Boolean) {
+        getSharedPreferences("rx_state", MODE_PRIVATE).edit().putBoolean("auto", on).apply()
+    }
+
+    private fun startWatchService() {
+        val intent = Intent(this, ReceiverService::class.java).apply { action = ReceiverService.ACTION_WATCH }
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+    private fun addAutoStartControl() {
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_card)
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(16) }
+        }
+        val check = CheckBox(this).apply {
+            text = "Auto-start when an AUX cable is plugged in"
+            isChecked = autoStartEnabled()
+            setTextColor(Color.parseColor("#F2F4F8"))
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val hint = TextView(this).apply {
+            text = "Keeps a small notification running and starts listening the moment you plug the cable " +
+                "into this phone. It pauses when you unplug, or after 10 minutes with no transmitter. " +
+                "After restarting the phone, open this app once. Untick it to start manually without a cable."
+            setTextColor(Color.parseColor("#9AA4B2"))
+            textSize = 12f
+        }
+        check.setOnCheckedChangeListener { _, checked ->
+            if (suppressAutoListener) return@setOnCheckedChangeListener
+            setAutoStartEnabled(checked)
+            if (checked) startWatchService() else boundService?.disableAutoWatch()
+        }
+        autoCheck = check
+        card.addView(check)
+        card.addView(hint)
+        val parent = binding.tvLog.parent as LinearLayout
+        parent.addView(card, parent.indexOfChild(binding.tvLog))
     }
 
     override fun onStart() {
@@ -83,6 +155,11 @@ class ReceiverActivity : AppCompatActivity() {
         val state = boundService?.stats?.value?.state
         val active = state != null && state != ConnState.IDLE
         if (active) {
+            // STOP switches everything off, including the AUX auto-start.
+            setAutoStartEnabled(false)
+            suppressAutoListener = true
+            autoCheck?.isChecked = false
+            suppressAutoListener = false
             boundService?.requestStop()
         } else {
             val intent = Intent(this, ReceiverService::class.java).apply { action = ReceiverService.ACTION_START }
